@@ -201,6 +201,24 @@ func TestServiceIDs_WithLatestResolution(t *testing.T) {
 	assert.Equal(t, "note", entries[0].Body)
 }
 
+func TestServiceIDs_ReturnsEmptySlice(t *testing.T) {
+	api := &fakeAPI{}
+	api.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		require.Equal(t, "GET", method)
+		require.Equal(t, "repos/octo/demo/pulls/7/reviews/55/comments", path)
+		require.Equal(t, "1", params["page"])
+		require.Equal(t, "100", params["per_page"])
+		return assign(result, []map[string]interface{}{})
+	}
+
+	svc := NewService(api)
+	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
+	entries, err := svc.IDs(pr, IDsOptions{ReviewID: 55})
+	require.NoError(t, err)
+	require.NotNil(t, entries)
+	assert.Empty(t, entries)
+}
+
 func TestServiceIDs_InvalidLimit(t *testing.T) {
 	svc := NewService(&fakeAPI{})
 	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
