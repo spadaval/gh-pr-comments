@@ -185,12 +185,6 @@ func (c *Client) GraphQL(query string, variables map[string]interface{}, result 
 	if err := json.Unmarshal(stdout, &envelope); err != nil {
 		return fmt.Errorf("unmarshal graphql response: %w", err)
 	}
-	if len(envelope.Data) > 0 && result != nil {
-		if err := json.Unmarshal(envelope.Data, result); err != nil {
-			return fmt.Errorf("unmarshal graphql data: %w", err)
-		}
-	}
-
 	if len(envelope.Errors) > 0 {
 		errs := make([]GraphQLErrorEntry, 0, len(envelope.Errors))
 		for _, raw := range envelope.Errors {
@@ -201,6 +195,12 @@ func (c *Client) GraphQL(query string, variables map[string]interface{}, result 
 			errs = append(errs, entry)
 		}
 		return &GraphQLError{Errors: errs}
+	}
+
+	if len(envelope.Data) > 0 && result != nil {
+		if err := json.Unmarshal(envelope.Data, result); err != nil {
+			return fmt.Errorf("unmarshal graphql data: %w", err)
+		}
 	}
 
 	if len(envelope.Data) == 0 && result != nil {
