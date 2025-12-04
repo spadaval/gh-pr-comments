@@ -56,7 +56,7 @@ func (s *Service) IDs(pr resolver.Identity, opts IDsOptions) ([]CommentReference
 	}
 
 	limit := opts.Limit
-	var results []CommentReference
+	results := make([]CommentReference, 0)
 
 	for current := page; ; current++ {
 		var chunk []restComment
