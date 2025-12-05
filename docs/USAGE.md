@@ -19,7 +19,7 @@ instead of serializing as `null`. Array responses default to `[]`.
     the pull request head).
 - **Backend:** GitHub GraphQL `addPullRequestReview` mutation.
 - **Output schema:** [`ReviewState`](SCHEMAS.md#reviewstate) — required fields
-  `id` and `state`; optional `submitted_at`, `database_id`, `html_url`.
+  `id` and `state`; optional `submitted_at`, `html_url`.
 
 ```sh
 gh pr-review review --start owner/repo#42
@@ -27,7 +27,6 @@ gh pr-review review --start owner/repo#42
 {
   "id": "PRR_kwDOAAABbcdEFG12",
   "state": "PENDING",
-  "database_id": 3531807471,
   "html_url": "https://github.com/owner/repo/pull/42#pullrequestreview-3531807471"
 }
 ```

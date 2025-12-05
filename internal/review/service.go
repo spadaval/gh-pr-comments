@@ -22,7 +22,6 @@ type ReviewState struct {
 	ID          string  `json:"id"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submitted_at,omitempty"`
-	DatabaseID  *int64  `json:"database_id,omitempty"`
 	HTMLURL     *string `json:"html_url,omitempty"`
 }
 
@@ -77,7 +76,7 @@ func (s *Service) Start(pr resolver.Identity, commitOID string) (*ReviewState, e
 
 	const mutation = `mutation($input:AddPullRequestReviewInput!){
   addPullRequestReview(input:$input){
-    pullRequestReview { id state submittedAt databaseId url }
+    pullRequestReview { id state submittedAt url }
   }
 }`
 
@@ -94,7 +93,6 @@ func (s *Service) Start(pr resolver.Identity, commitOID string) (*ReviewState, e
 				ID          string  `json:"id"`
 				State       string  `json:"state"`
 				SubmittedAt *string `json:"submittedAt"`
-				DatabaseID  *int64  `json:"databaseId"`
 				URL         string  `json:"url"`
 			} `json:"pullRequestReview"`
 		} `json:"addPullRequestReview"`
@@ -125,9 +123,6 @@ func (s *Service) Start(pr resolver.Identity, commitOID string) (*ReviewState, e
 		if trimmed != "" {
 			state.SubmittedAt = &trimmed
 		}
-	}
-	if prr.DatabaseID != nil {
-		state.DatabaseID = prr.DatabaseID
 	}
 	state.HTMLURL = &trimmedURL
 

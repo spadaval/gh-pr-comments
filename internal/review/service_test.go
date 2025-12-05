@@ -62,7 +62,6 @@ func TestServiceStart(t *testing.T) {
 						"id":          "PRR_review",
 						"state":       "PENDING",
 						"submittedAt": nil,
-						"databaseId":  321,
 						"url":         "https://example.com/review/PRR_review",
 					},
 				},
@@ -79,8 +78,6 @@ func TestServiceStart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "PRR_review", state.ID)
 	assert.Equal(t, "PENDING", state.State)
-	require.NotNil(t, state.DatabaseID)
-	assert.Equal(t, int64(321), *state.DatabaseID)
 	require.Nil(t, state.SubmittedAt)
 	require.NotNil(t, state.HTMLURL)
 	assert.Equal(t, "https://example.com/review/PRR_review", *state.HTMLURL)

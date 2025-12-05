@@ -27,11 +27,6 @@ Used by `review --start` and `review --submit`.
       "format": "date-time",
       "description": "RFC3339 timestamp of the submission (omitted when pending)"
     },
-    "database_id": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "REST review identifier"
-    },
     "html_url": {
       "type": "string",
       "format": "uri",
