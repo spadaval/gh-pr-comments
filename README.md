@@ -59,21 +59,37 @@ The quickest path from opening a pending review to resolving threads:
    }
    ```
 
-4. **Locate the review identifier (GraphQL).** `review pending-id` reads
-   GraphQL only; when the authenticated viewer login cannot be resolved, the
-   command errors with guidance to pass `--reviewer`. The response includes the
-   GraphQL review node ID and matching numeric database ID.
+4. **Inspect review threads (GraphQL).** `review report` surfaces pending
+   review summaries and inline comment metadata (including numeric comment IDs)
+   in a single payload.
 
    ```sh
-   gh pr-review review pending-id --reviewer octocat owner/repo#42
+   gh pr-review review report --reviewer octocat owner/repo#42
 
    {
-     "id": "PRR_kwDOAAABbcdEFG12",
-     "database_id": 3531807471,
-     "state": "PENDING",
-     "html_url": "https://github.com/owner/repo/pull/42#pullrequestreview-3531807471",
-     "user": { "login": "octocat", "id": 6752317 }
+     "reviews": [
+       {
+         "id": "PRR_kwDOAAABbcdEFG12",
+         "state": "COMMENTED",
+         "comments": [
+           {
+             "id": 3531807471,
+             "path": "internal/service.go",
+             "body": "nit: prefer helper"
+           }
+         ]
+       }
+     ]
    }
+   ```
+
+   Use the numeric `id` values with `comments reply` to continue threads:
+
+   ```sh
+   gh pr-review comments reply \
+     --comment-id 3531807471 \
+     --body "Follow-up addressed in commit abc123" \
+     owner/repo#42
    ```
 
 5. **Submit the review (GraphQL).** Reuse the pending review `PRR_…`
@@ -241,10 +257,8 @@ Each command binds to a single GitHub backend—there are no runtime fallbacks.
 | --- | --- | --- |
 | `review --start` | GraphQL | Opens a pending review via `addPullRequestReview`. |
 | `review --add-comment` | GraphQL | Requires a `PRR_…` review node ID. |
-| `review pending-id` | GraphQL | Fails with guidance if the viewer login is unavailable; pass `--reviewer`. |
-| `review latest-id` | REST | Walks `/pulls/{number}/reviews` to find the latest submitted review. |
+| `review report` | GraphQL | Aggregates reviews, inline comments, and replies (used for comment IDs). |
 | `review --submit` | REST | Accepts only numeric review IDs and posts `/reviews/{id}/events`. |
-| `comments ids` | REST | Pages `/reviews/{id}/comments`; optional reviewer resolution uses REST only. |
 | `comments reply` | REST (GraphQL only locates pending reviews before REST auto-submission) | Replies via REST; when GitHub blocks the reply due to a pending review, the extension discovers pending review IDs via GraphQL and submits them with REST before retrying. |
 | `threads list` | GraphQL | Enumerates review threads for the pull request. |
 | `threads resolve` / `unresolve` | GraphQL (+ REST when mapping `--comment-id`) | Mutates thread resolution with GraphQL; a REST lookup translates numeric comment IDs to node IDs. |
