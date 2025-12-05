@@ -36,10 +36,9 @@ func TestReviewStartCommand_GraphQLOnly(t *testing.T) {
 			payload := map[string]interface{}{
 				"addPullRequestReview": map[string]interface{}{
 					"pullRequestReview": map[string]interface{}{
-						"id":         "PRR_review",
-						"state":      "PENDING",
-						"databaseId": float64(88),
-						"url":        "https://example.com/review/PRR_review",
+						"id":    "PRR_review",
+						"state": "PENDING",
+						"url":   "https://example.com/review/PRR_review",
 					},
 				},
 			}
@@ -65,10 +64,11 @@ func TestReviewStartCommand_GraphQLOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
 	assert.Equal(t, "PRR_review", payload["id"])
 	assert.Equal(t, "PENDING", payload["state"])
-	assert.Equal(t, float64(88), payload["database_id"])
 	assert.Equal(t, "https://example.com/review/PRR_review", payload["html_url"])
 	_, hasSubmitted := payload["submitted_at"]
 	assert.False(t, hasSubmitted)
+	_, hasDatabase := payload["database_id"]
+	assert.False(t, hasDatabase)
 	assert.Equal(t, 2, call)
 }
 

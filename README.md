@@ -26,17 +26,16 @@ The quickest path from opening a pending review to resolving threads:
    > existing macOS, Windows, and Linux targets.
 
 2. **Start a pending review (GraphQL).** Capture the returned `id` (GraphQL
-   node) and optional `database_id`.
+   node).
 
    ```sh
    gh pr-review review --start owner/repo#42
 
-   {
-     "id": "PRR_kwDOAAABbcdEFG12",
-     "state": "PENDING",
-     "database_id": 3531807471,
-     "html_url": "https://github.com/owner/repo/pull/42#pullrequestreview-3531807471"
-   }
+{
+  "id": "PRR_kwDOAAABbcdEFG12",
+  "state": "PENDING",
+  "html_url": "https://github.com/owner/repo/pull/42#pullrequestreview-3531807471"
+}
    ```
 
 3. **Add inline comments with the pending review ID (GraphQL).** The
