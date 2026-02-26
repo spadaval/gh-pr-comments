@@ -45,3 +45,5 @@ PR resolution is delegated to `gh pr view --json url` so behavior matches normal
 ```bash
 gh extension install <owner>/gh-pr-comments
 ```
+
+This extension is installed as a source extension and runs via `go run`, so Go must be installed and available in `PATH`.
