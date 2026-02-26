@@ -1,18 +1,17 @@
 package resolver
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
-var (
-	pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/([0-9]+)(?:/.*)?$`)
-)
+var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/([0-9]+)(?:/.*)?$`)
 
 // Identity represents a fully-resolved pull request reference.
 type Identity struct {
@@ -20,59 +19,92 @@ type Identity struct {
 	Repo   string
 	Host   string
 	Number int
+	URL    string
 }
 
-// NormalizeSelector ensures that either an explicit selector or --pr flag is present and mutually consistent.
-func NormalizeSelector(selector string, prFlag int) (string, error) {
-	selector = strings.TrimSpace(selector)
-
-	switch {
-	case selector != "" && prFlag > 0:
-		if !matchesNumber(selector, prFlag) {
-			return "", fmt.Errorf("pull request argument %q does not match --pr=%d", selector, prFlag)
+var runGh = func(args ...string) ([]byte, error) {
+	cmd := exec.Command("gh", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
 		}
-	case selector == "" && prFlag > 0:
-		selector = strconv.Itoa(prFlag)
+		return nil, errors.New(msg)
 	}
-
-	if selector == "" {
-		return "", errors.New("must specify a pull request via --pr or selector")
-	}
-
-	if isNumeric(selector) {
-		return selector, nil
-	}
-
-	if _, err := parsePullURL(selector); err == nil {
-		return selector, nil
-	}
-
-	return "", fmt.Errorf("invalid pull request selector %q: must be a pull request URL or number", selector)
+	return output, nil
 }
 
-// Resolve interprets a selector, optional repo flag, and host (GH_HOST) into a concrete pull request identity.
-func Resolve(selector, repoFlag, host string) (Identity, error) {
+// Resolve infers the pull request identity similarly to `gh pr view`.
+//
+// Priority:
+//  1. explicit selector arg
+//  2. --pr flag
+//  3. current branch PR via gh default behavior
+func Resolve(selector string, prFlag int, repoFlag string) (Identity, error) {
+	resolvedSelector, err := normalizeSelector(selector, prFlag)
+	if err != nil {
+		return Identity{}, err
+	}
+
+	args := []string{"pr", "view"}
+	if resolvedSelector != "" {
+		args = append(args, resolvedSelector)
+	}
+	if repo := strings.TrimSpace(repoFlag); repo != "" {
+		args = append(args, "--repo", repo)
+	}
+	args = append(args, "--json", "url")
+
+	output, err := runGh(args...)
+	if err != nil {
+		return Identity{}, fmt.Errorf("resolve pull request via gh pr view: %w", err)
+	}
+
+	var payload struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return Identity{}, fmt.Errorf("parse gh pr view output: %w", err)
+	}
+	if strings.TrimSpace(payload.URL) == "" {
+		return Identity{}, errors.New("gh pr view did not return a pull request URL")
+	}
+
+	identity, err := parsePullURL(payload.URL)
+	if err != nil {
+		return Identity{}, fmt.Errorf("parse pull request URL from gh pr view: %w", err)
+	}
+	identity.URL = payload.URL
+	return identity, nil
+}
+
+func normalizeSelector(selector string, prFlag int) (string, error) {
 	selector = strings.TrimSpace(selector)
-	repoFlag = strings.TrimSpace(repoFlag)
-	host = sanitizeHost(host)
 
-	if selector == "" {
-		return Identity{}, errors.New("empty selector")
+	if prFlag < 0 {
+		return "", errors.New("--pr must be a positive integer")
 	}
 
-	if id, err := parsePullURL(selector); err == nil {
-		return id, nil
-	}
-
-	if n, err := strconv.Atoi(selector); err == nil && n > 0 {
-		owner, repo, err := splitRepo(repoFlag)
-		if err != nil {
-			return Identity{}, fmt.Errorf("--repo must be owner/repo when using numeric selectors: %w", err)
+	if prFlag > 0 {
+		if selector == "" {
+			return strconv.Itoa(prFlag), nil
 		}
-		return Identity{Owner: owner, Repo: repo, Host: host, Number: n}, nil
+		if n, err := strconv.Atoi(selector); err == nil {
+			if n != prFlag {
+				return "", fmt.Errorf("pull request argument %q does not match --pr=%d", selector, prFlag)
+			}
+			return selector, nil
+		}
+		if id, err := parsePullURL(selector); err == nil {
+			if id.Number != prFlag {
+				return "", fmt.Errorf("pull request argument %q does not match --pr=%d", selector, prFlag)
+			}
+			return selector, nil
+		}
 	}
 
-	return Identity{}, fmt.Errorf("invalid pull request selector: %q", selector)
+	return selector, nil
 }
 
 func parsePullURL(raw string) (Identity, error) {
@@ -87,77 +119,14 @@ func parsePullURL(raw string) (Identity, error) {
 	if matches == nil {
 		return Identity{}, errors.New("not a pull request url")
 	}
-	number, _ := strconv.Atoi(matches[3])
+	number, err := strconv.Atoi(matches[3])
+	if err != nil || number <= 0 {
+		return Identity{}, errors.New("invalid pull request number")
+	}
 	return Identity{
 		Owner:  matches[1],
 		Repo:   matches[2],
-		Host:   sanitizeHost(u.Host),
+		Host:   strings.ToLower(u.Hostname()),
 		Number: number,
 	}, nil
-}
-
-func matchesNumber(selector string, target int) bool {
-	if id, err := parsePullURL(selector); err == nil {
-		return id.Number == target
-	}
-	if n, err := strconv.Atoi(selector); err == nil {
-		return n == target
-	}
-	return false
-}
-
-func isNumeric(selector string) bool {
-	if selector == "" {
-		return false
-	}
-	for _, r := range selector {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func splitRepo(repoFlag string) (string, string, error) {
-	if repoFlag == "" {
-		return "", "", errors.New("missing --repo")
-	}
-	parts := strings.Split(repoFlag, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", errors.New("expected owner/repo")
-	}
-	return parts[0], parts[1], nil
-}
-
-func sanitizeHost(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "github.com"
-	}
-
-	lower := strings.ToLower(raw)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		if u, err := url.Parse(raw); err == nil && u.Host != "" {
-			raw = u.Host
-		} else {
-			raw = strings.TrimPrefix(strings.TrimPrefix(lower, "http://"), "https://")
-		}
-	}
-
-	if strings.Contains(raw, "/") {
-		raw = strings.SplitN(raw, "/", 2)[0]
-	}
-
-	if host, _, err := net.SplitHostPort(raw); err == nil {
-		raw = host
-	} else if idx := strings.Index(raw, ":"); idx >= 0 {
-		raw = raw[:idx]
-	}
-
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "github.com"
-	}
-
-	return strings.ToLower(raw)
 }

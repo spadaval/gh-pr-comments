@@ -15,15 +15,14 @@ func Execute() error {
 
 func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "gh-pr-review",
-		Short:         "PR review helper commands for gh",
+		Use:           "gh-pr-comments",
+		Short:         "List and create inline pull request comments",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
-	cmd.AddCommand(newCommentsCommand())
-	cmd.AddCommand(newReviewCommand())
-	cmd.AddCommand(newThreadsCommand())
+	cmd.AddCommand(newListCommand())
+	cmd.AddCommand(newCreateCommand())
 
 	return cmd
 }

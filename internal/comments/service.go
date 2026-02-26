@@ -2,243 +2,347 @@ package comments
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/agynio/gh-pr-review/internal/ghcli"
 	"github.com/agynio/gh-pr-review/internal/resolver"
 )
 
-const addThreadReplyMutation = `mutation AddPullRequestReviewThreadReply($input: AddPullRequestReviewThreadReplyInput!) {
-  addPullRequestReviewThreadReply(input: $input) {
-    comment {
-      id
-      body
-      publishedAt
-      author { login }
+const listThreadsQuery = `query PullRequestInlineComments($owner: String!, $name: String!, $number: Int!, $firstThreads: Int!, $firstComments: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: $firstThreads) {
+        nodes {
+          id
+          path
+          line
+          startLine
+          isResolved
+          isOutdated
+          comments(first: $firstComments) {
+            nodes {
+              id
+              body
+              createdAt
+              url
+              author { login }
+            }
+          }
+        }
+      }
     }
   }
 }`
 
-const commentDetailsQuery = `query PullRequestReviewCommentDetails($id: ID!) {
-  node(id: $id) {
-    ... on PullRequestReviewComment {
+const pullRequestNodeQuery = `query PullRequestNode($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
       id
-      databaseId
-      body
-      diffHunk
+    }
+  }
+}`
+
+const createThreadMutation = `mutation AddPullRequestReviewThread($input: AddPullRequestReviewThreadInput!) {
+  addPullRequestReviewThread(input: $input) {
+    thread {
+      id
       path
-      url
-      createdAt
-      updatedAt
-      author { login }
-      pullRequestReview { id databaseId state }
-      replyTo { id }
-    }
-  }
-}`
-
-const threadDetailsQuery = `query PullRequestReviewThreadDetails($id: ID!) {
-  node(id: $id) {
-    ... on PullRequestReviewThread {
-      id
+      line
+      startLine
       isResolved
       isOutdated
+      comments(first: 1) {
+        nodes {
+          id
+          body
+          createdAt
+          url
+          author { login }
+        }
+      }
     }
   }
 }`
 
-// Service provides high-level review comment operations.
+const (
+	defaultFirstThreads  = 100
+	defaultFirstComments = 100
+)
+
+// Service provides inline pull request comment operations.
 type Service struct {
 	API ghcli.API
 }
 
-// ReplyOptions contains the payload for replying to a review comment thread.
-type ReplyOptions struct {
-	ThreadID string
-	ReviewID string
-	Body     string
-}
-
-// Reply represents the normalized GraphQL response after adding a thread reply.
-type Reply struct {
-	CommentNodeID    string  `json:"comment_node_id"`
-	DatabaseID       *int    `json:"database_id,omitempty"`
-	ReviewID         *string `json:"review_id,omitempty"`
-	ReviewDatabaseID *int    `json:"review_database_id,omitempty"`
-	ReviewState      *string `json:"review_state,omitempty"`
-	ThreadID         string  `json:"thread_id"`
-	ThreadIsResolved bool    `json:"thread_is_resolved"`
-	ThreadIsOutdated bool    `json:"thread_is_outdated"`
-	ReplyToCommentID *string `json:"reply_to_comment_id,omitempty"`
-	Body             string  `json:"body"`
-	DiffHunk         *string `json:"diff_hunk,omitempty"`
-	Path             string  `json:"path"`
-	HtmlURL          string  `json:"html_url"`
-	AuthorLogin      string  `json:"author_login"`
-	CreatedAt        string  `json:"created_at"`
-	UpdatedAt        string  `json:"updated_at"`
-}
-
-type commentDetails struct {
-	ID         string  `json:"id"`
-	DatabaseID *int    `json:"databaseId"`
-	Body       string  `json:"body"`
-	DiffHunk   *string `json:"diffHunk"`
-	Path       string  `json:"path"`
-	URL        string  `json:"url"`
-	CreatedAt  string  `json:"createdAt"`
-	UpdatedAt  string  `json:"updatedAt"`
-	Author     *struct {
-		Login string `json:"login"`
-	} `json:"author"`
-	PullRequestReview *struct {
-		ID         string `json:"id"`
-		DatabaseID *int   `json:"databaseId"`
-		State      string `json:"state"`
-	} `json:"pullRequestReview"`
-	ReplyTo *struct {
-		ID string `json:"id"`
-	} `json:"replyTo"`
-}
-
-type threadDetails struct {
-	ID         string `json:"id"`
-	IsResolved bool   `json:"isResolved"`
-	IsOutdated bool   `json:"isOutdated"`
-}
-
-// NewService constructs a Service using the provided API client.
+// NewService constructs a comment service with the provided API client.
 func NewService(api ghcli.API) *Service {
 	return &Service{API: api}
 }
 
-// Reply posts a reply to an existing review thread using the GraphQL API.
-func (s *Service) Reply(_ resolver.Identity, opts ReplyOptions) (Reply, error) {
-	threadID := strings.TrimSpace(opts.ThreadID)
-	if threadID == "" {
-		return Reply{}, errors.New("thread id is required")
-	}
-	if strings.TrimSpace(opts.Body) == "" {
-		return Reply{}, errors.New("reply body is required")
-	}
+// Comment represents one inline PR review comment.
+type Comment struct {
+	ID        string `json:"id"`
+	Body      string `json:"body"`
+	Author    string `json:"author"`
+	CreatedAt string `json:"created_at"`
+	URL       string `json:"url"`
+}
 
-	input := map[string]interface{}{
-		"pullRequestReviewThreadId": threadID,
-		"body":                      opts.Body,
-	}
-	if reviewID := strings.TrimSpace(opts.ReviewID); reviewID != "" {
-		input["pullRequestReviewId"] = reviewID
-	}
+// Thread represents an inline review thread on a PR diff.
+type Thread struct {
+	ID         string    `json:"id"`
+	Path       string    `json:"path"`
+	Line       *int      `json:"line,omitempty"`
+	StartLine  *int      `json:"start_line,omitempty"`
+	IsResolved bool      `json:"is_resolved"`
+	IsOutdated bool      `json:"is_outdated"`
+	Comments   []Comment `json:"comments"`
+}
 
-	variables := map[string]interface{}{"input": input}
+// CreateInput holds parameters for creating an inline comment thread.
+type CreateInput struct {
+	Path      string
+	Line      int
+	Side      string
+	StartLine *int
+	StartSide *string
+	Body      string
+}
+
+// CreateResult returns normalized details for a newly-created inline comment thread.
+type CreateResult struct {
+	ThreadID    string `json:"thread_id"`
+	CommentID   string `json:"comment_id"`
+	Path        string `json:"path"`
+	Line        *int   `json:"line,omitempty"`
+	StartLine   *int   `json:"start_line,omitempty"`
+	Author      string `json:"author"`
+	Body        string `json:"body"`
+	CreatedAt   string `json:"created_at"`
+	URL         string `json:"url"`
+	IsResolved  bool   `json:"is_resolved"`
+	IsOutdated  bool   `json:"is_outdated"`
+	RequestedOn string `json:"requested_side"`
+}
+
+// List fetches inline review threads/comments for a pull request.
+func (s *Service) List(pr resolver.Identity) ([]Thread, error) {
+	variables := map[string]interface{}{
+		"owner":         pr.Owner,
+		"name":          pr.Repo,
+		"number":        pr.Number,
+		"firstThreads":  defaultFirstThreads,
+		"firstComments": defaultFirstComments,
+	}
 
 	var response struct {
-		AddPullRequestReviewThreadReply struct {
-			Comment *struct {
-				ID          string `json:"id"`
-				Body        string `json:"body"`
-				PublishedAt string `json:"publishedAt"`
-				Author      *struct {
-					Login string `json:"login"`
-				} `json:"author"`
-			} `json:"comment"`
-		} `json:"addPullRequestReviewThreadReply"`
+		Repository *struct {
+			PullRequest *struct {
+				ReviewThreads struct {
+					Nodes []struct {
+						ID         string `json:"id"`
+						Path       string `json:"path"`
+						Line       *int   `json:"line"`
+						StartLine  *int   `json:"startLine"`
+						IsResolved bool   `json:"isResolved"`
+						IsOutdated bool   `json:"isOutdated"`
+						Comments   struct {
+							Nodes []struct {
+								ID        string `json:"id"`
+								Body      string `json:"body"`
+								CreatedAt string `json:"createdAt"`
+								URL       string `json:"url"`
+								Author    *struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
+					} `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
 	}
 
-	if err := s.API.GraphQL(addThreadReplyMutation, variables, &response); err != nil {
-		return Reply{}, err
+	if err := s.API.GraphQL(listThreadsQuery, variables, &response); err != nil {
+		return nil, err
 	}
 
-	comment := response.AddPullRequestReviewThreadReply.Comment
-	if comment == nil {
-		return Reply{}, errors.New("mutation response missing comment")
+	if response.Repository == nil || response.Repository.PullRequest == nil {
+		return nil, errors.New("pull request not found or inaccessible")
 	}
-	if strings.TrimSpace(comment.ID) == "" {
-		return Reply{}, errors.New("mutation response missing comment id")
+
+	nodes := response.Repository.PullRequest.ReviewThreads.Nodes
+	threads := make([]Thread, 0, len(nodes))
+	for _, node := range nodes {
+		thread := Thread{
+			ID:         node.ID,
+			Path:       node.Path,
+			Line:       node.Line,
+			StartLine:  node.StartLine,
+			IsResolved: node.IsResolved,
+			IsOutdated: node.IsOutdated,
+			Comments:   make([]Comment, 0, len(node.Comments.Nodes)),
+		}
+
+		for _, c := range node.Comments.Nodes {
+			if c.Author == nil || strings.TrimSpace(c.Author.Login) == "" {
+				return nil, errors.New("comment missing author")
+			}
+			thread.Comments = append(thread.Comments, Comment{
+				ID:        c.ID,
+				Body:      c.Body,
+				Author:    c.Author.Login,
+				CreatedAt: c.CreatedAt,
+				URL:       c.URL,
+			})
+		}
+
+		threads = append(threads, thread)
 	}
+
+	return threads, nil
+}
+
+// Create opens a new inline review thread with one comment on the given PR.
+func (s *Service) Create(pr resolver.Identity, input CreateInput) (CreateResult, error) {
+	path := strings.TrimSpace(input.Path)
+	body := strings.TrimSpace(input.Body)
+	if path == "" {
+		return CreateResult{}, errors.New("path is required")
+	}
+	if input.Line <= 0 {
+		return CreateResult{}, errors.New("line must be greater than zero")
+	}
+	if body == "" {
+		return CreateResult{}, errors.New("body is required")
+	}
+
+	side, err := normalizeSide(input.Side)
+	if err != nil {
+		return CreateResult{}, err
+	}
+
+	prID, err := s.pullRequestNodeID(pr)
+	if err != nil {
+		return CreateResult{}, err
+	}
+
+	mutationInput := map[string]interface{}{
+		"pullRequestId": prID,
+		"path":          path,
+		"line":          input.Line,
+		"side":          side,
+		"body":          body,
+	}
+
+	if input.StartLine != nil {
+		if *input.StartLine <= 0 {
+			return CreateResult{}, errors.New("start-line must be greater than zero")
+		}
+		mutationInput["startLine"] = *input.StartLine
+	}
+	if input.StartSide != nil {
+		normalizedStartSide, err := normalizeSide(*input.StartSide)
+		if err != nil {
+			return CreateResult{}, fmt.Errorf("invalid start-side: %w", err)
+		}
+		mutationInput["startSide"] = normalizedStartSide
+	}
+
+	var response struct {
+		AddPullRequestReviewThread struct {
+			Thread *struct {
+				ID         string `json:"id"`
+				Path       string `json:"path"`
+				Line       *int   `json:"line"`
+				StartLine  *int   `json:"startLine"`
+				IsResolved bool   `json:"isResolved"`
+				IsOutdated bool   `json:"isOutdated"`
+				Comments   struct {
+					Nodes []struct {
+						ID        string `json:"id"`
+						Body      string `json:"body"`
+						CreatedAt string `json:"createdAt"`
+						URL       string `json:"url"`
+						Author    *struct {
+							Login string `json:"login"`
+						} `json:"author"`
+					} `json:"nodes"`
+				} `json:"comments"`
+			} `json:"thread"`
+		} `json:"addPullRequestReviewThread"`
+	}
+
+	if err := s.API.GraphQL(createThreadMutation, map[string]interface{}{"input": mutationInput}, &response); err != nil {
+		return CreateResult{}, err
+	}
+
+	thread := response.AddPullRequestReviewThread.Thread
+	if thread == nil {
+		return CreateResult{}, errors.New("create response missing thread")
+	}
+	if len(thread.Comments.Nodes) == 0 {
+		return CreateResult{}, errors.New("create response missing comment")
+	}
+
+	comment := thread.Comments.Nodes[0]
 	if comment.Author == nil || strings.TrimSpace(comment.Author.Login) == "" {
-		return Reply{}, errors.New("mutation response missing author login")
-	}
-	commentDetails, err := s.loadCommentDetails(comment.ID)
-	if err != nil {
-		return Reply{}, err
+		return CreateResult{}, errors.New("create response missing comment author")
 	}
 
-	threadDetails, err := s.loadThreadDetails(threadID)
-	if err != nil {
-		return Reply{}, err
-	}
-
-	reply := Reply{
-		CommentNodeID:    commentDetails.ID,
-		ThreadID:         threadID,
-		ThreadIsResolved: threadDetails.IsResolved,
-		ThreadIsOutdated: threadDetails.IsOutdated,
-		Body:             commentDetails.Body,
-		Path:             commentDetails.Path,
-		HtmlURL:          commentDetails.URL,
-		AuthorLogin:      commentDetails.Author.Login,
-		CreatedAt:        commentDetails.CreatedAt,
-		UpdatedAt:        commentDetails.UpdatedAt,
-	}
-
-	if commentDetails.DatabaseID != nil {
-		reply.DatabaseID = commentDetails.DatabaseID
-	}
-	if commentDetails.DiffHunk != nil {
-		trimmed := strings.TrimSpace(*commentDetails.DiffHunk)
-		if trimmed != "" {
-			value := *commentDetails.DiffHunk
-			reply.DiffHunk = &value
-		}
-	}
-	if commentDetails.PullRequestReview != nil {
-		if reviewID := strings.TrimSpace(commentDetails.PullRequestReview.ID); reviewID != "" {
-			reply.ReviewID = &reviewID
-		}
-		if commentDetails.PullRequestReview.DatabaseID != nil {
-			reply.ReviewDatabaseID = commentDetails.PullRequestReview.DatabaseID
-		}
-		if state := strings.TrimSpace(commentDetails.PullRequestReview.State); state != "" {
-			reply.ReviewState = &state
-		}
-	}
-	if commentDetails.ReplyTo != nil {
-		if replyToID := strings.TrimSpace(commentDetails.ReplyTo.ID); replyToID != "" {
-			reply.ReplyToCommentID = &replyToID
-		}
-	}
-
-	return reply, nil
+	return CreateResult{
+		ThreadID:    thread.ID,
+		CommentID:   comment.ID,
+		Path:        thread.Path,
+		Line:        thread.Line,
+		StartLine:   thread.StartLine,
+		Author:      comment.Author.Login,
+		Body:        comment.Body,
+		CreatedAt:   comment.CreatedAt,
+		URL:         comment.URL,
+		IsResolved:  thread.IsResolved,
+		IsOutdated:  thread.IsOutdated,
+		RequestedOn: side,
+	}, nil
 }
 
-func (s *Service) loadCommentDetails(id string) (commentDetails, error) {
-	variables := map[string]interface{}{"id": id}
+func (s *Service) pullRequestNodeID(pr resolver.Identity) (string, error) {
+	variables := map[string]interface{}{
+		"owner":  pr.Owner,
+		"name":   pr.Repo,
+		"number": pr.Number,
+	}
+
 	var response struct {
-		Node *commentDetails `json:"node"`
+		Repository *struct {
+			PullRequest *struct {
+				ID string `json:"id"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
 	}
-	if err := s.API.GraphQL(commentDetailsQuery, variables, &response); err != nil {
-		return commentDetails{}, err
+
+	if err := s.API.GraphQL(pullRequestNodeQuery, variables, &response); err != nil {
+		return "", err
 	}
-	if response.Node == nil || strings.TrimSpace(response.Node.ID) == "" {
-		return commentDetails{}, errors.New("failed to load comment details")
+	if response.Repository == nil || response.Repository.PullRequest == nil {
+		return "", errors.New("pull request not found or inaccessible")
 	}
-	if response.Node.Author == nil || strings.TrimSpace(response.Node.Author.Login) == "" {
-		return commentDetails{}, errors.New("comment details missing author")
+	id := strings.TrimSpace(response.Repository.PullRequest.ID)
+	if id == "" {
+		return "", errors.New("pull request id missing from response")
 	}
-	return *response.Node, nil
+	return id, nil
 }
 
-func (s *Service) loadThreadDetails(id string) (threadDetails, error) {
-	variables := map[string]interface{}{"id": id}
-	var response struct {
-		Node *threadDetails `json:"node"`
+func normalizeSide(side string) (string, error) {
+	s := strings.ToUpper(strings.TrimSpace(side))
+	switch s {
+	case "LEFT", "RIGHT":
+		return s, nil
+	case "":
+		return "", errors.New("side is required")
+	default:
+		return "", fmt.Errorf("invalid side %q: must be LEFT or RIGHT", side)
 	}
-	if err := s.API.GraphQL(threadDetailsQuery, variables, &response); err != nil {
-		return threadDetails{}, err
-	}
-	if response.Node == nil || strings.TrimSpace(response.Node.ID) == "" {
-		return threadDetails{}, errors.New("failed to load thread details")
-	}
-	return *response.Node, nil
 }
